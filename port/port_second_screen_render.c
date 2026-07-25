@@ -6,6 +6,7 @@
 #include "structures.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /* Defined in src/common.c, next to LoadPaletteGroup — needs the file-private
  * gPaletteGroups/PaletteGroup ROM table, so it lives there rather than here.
@@ -105,4 +106,57 @@ void Port_SecondScreenRender_DrawItemIcon(uint32_t* pixels, int32_t bufWidth, in
             }
         }
     }
+}
+
+/* Android Bitmap wants ARGB ints (A<<24|R<<16|G<<8|B) — different channel
+ * order than the RGBA_8888 surface writes above. */
+static uint32_t Rgb555ToArgbInt(uint16_t c) {
+    uint32_t r = (c & 0x1Fu) << 3;
+    uint32_t g = ((c >> 5) & 0x1Fu) << 3;
+    uint32_t b = ((c >> 10) & 0x1Fu) << 3;
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+int Port_SecondScreenRender_RenderIconSheetArgb(uint32_t* px) {
+    const SpritePtr* sprite = Port_GetSpritePtr(322);
+    if (sprite == NULL || sprite->frames == NULL || sprite->ptr == NULL) {
+        return 0;
+    }
+    uint32_t numColors = 0;
+    const uint8_t* palette = Port_GetRawPaletteGroupData(ICON_PALETTE_GROUP, &numColors);
+    if (palette == NULL || numColors == 0) {
+        return 0;
+    }
+    const uint16_t* palette16 = (const uint16_t*)palette;
+    const uint8_t* tileData = (const uint8_t*)sprite->ptr;
+
+    memset(px, 0, (size_t)SECOND_SCREEN_ICON_SHEET_W * SECOND_SCREEN_ICON_SHEET_H * 4u);
+
+    for (uint32_t item = 1; item < SPRITE_ANIM_322_COUNT; item++) {
+        Frame* animation = (Frame*)port_resolve_addr((uintptr_t)gSpriteAnimations_322[item]);
+        if (animation == NULL) {
+            continue;
+        }
+        const SpriteFrame* frame = &sprite->frames[animation->index];
+        int32_t cellX = (int32_t)(item % SECOND_SCREEN_ICON_SHEET_COLS) * 16;
+        int32_t cellY = (int32_t)(item / SECOND_SCREEN_ICON_SHEET_COLS) * 16;
+        for (int32_t ty = 0; ty < 2; ty++) {
+            for (int32_t tx = 0; tx < 2; tx++) {
+                uint32_t tileIndex = (uint32_t)frame->firstTileIndex + (uint32_t)(ty * 2 + tx);
+                const uint8_t* tile = tileData + (size_t)tileIndex * 32u;
+                for (int32_t py = 0; py < 8; py++) {
+                    for (int32_t pxi = 0; pxi < 8; pxi++) {
+                        uint8_t packed = tile[py * 4 + pxi / 2];
+                        uint8_t ci = (pxi & 1) ? (uint8_t)(packed >> 4) : (uint8_t)(packed & 0x0Fu);
+                        if (ci == 0 || ci >= numColors) {
+                            continue;
+                        }
+                        px[(size_t)(cellY + ty * 8 + py) * SECOND_SCREEN_ICON_SHEET_W +
+                           (size_t)(cellX + tx * 8 + pxi)] = Rgb555ToArgbInt(palette16[ci]);
+                    }
+                }
+            }
+        }
+    }
+    return 1;
 }

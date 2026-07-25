@@ -36,6 +36,21 @@ extern "C" {
 void Port_SecondScreenRender_DrawItemIcon(uint32_t* pixels, int32_t bufWidth, int32_t bufHeight, int32_t stride,
                                            int32_t x, int32_t y, int32_t scale, uint8_t itemId);
 
+/* Renders the full item-icon sheet for the Java/Canvas second-screen UI
+ * (zelda3-android's SS_RenderIconSheet pattern): cell index == item id, 16
+ * columns x 8 rows of 16x16 cells (256x128), so the Java side needs no
+ * name->cell manifest — it indexes straight by the item id it got from the
+ * snapshot. `px` receives Android Bitmap ARGB (A<<24|R<<16|G<<8|B) with
+ * alpha-0 background, ready for Bitmap.createBitmap(). Returns 1 when the
+ * sprite tables were ready and the sheet was written, 0 otherwise (caller
+ * should retry later — tables appear once the ROM finishes loading). */
+int Port_SecondScreenRender_RenderIconSheetArgb(uint32_t* px);
+
+#define SECOND_SCREEN_ICON_SHEET_COLS 16
+#define SECOND_SCREEN_ICON_SHEET_ROWS 8
+#define SECOND_SCREEN_ICON_SHEET_W (SECOND_SCREEN_ICON_SHEET_COLS * 16)
+#define SECOND_SCREEN_ICON_SHEET_H (SECOND_SCREEN_ICON_SHEET_ROWS * 16)
+
 #ifdef __cplusplus
 }
 #endif
