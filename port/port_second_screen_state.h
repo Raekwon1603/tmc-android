@@ -52,6 +52,9 @@ typedef struct {
     uint8_t health;    /* 8 units per heart */
     uint8_t maxHealth;
     uint16_t rupees;
+    uint8_t kinstonesFused; /* KinstoneSave.fusedCount */
+    uint8_t figurineCount;  /* popcount of the figurines[36] bitset */
+    uint8_t elements;       /* bit i set = element i owned (Earth/Fire/Water/Wind) */
     int32_t playerX; /* area-space pixels */
     int32_t playerY;
     /* Pause-menu item screen contents: menuItems[menuSlot] = item id, 0 if

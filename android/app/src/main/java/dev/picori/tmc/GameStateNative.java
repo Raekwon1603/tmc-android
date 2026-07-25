@@ -40,11 +40,21 @@ public final class GameStateNative {
     public static final int ITEM_SLOTS = 16;
     public static final int MAX_ROOMS = 64;
 
+    // Gear-tab extras, right after the room block (34 + MAX_ROOMS*4).
+    public static final int KINSTONES_FUSED = ROOMS + MAX_ROOMS * 4;
+    public static final int FIGURINE_COUNT = KINSTONES_FUSED + 1;
+    public static final int ELEMENTS = KINSTONES_FUSED + 2; // bit0 Earth, 1 Fire, 2 Water, 3 Wind
+
     /** Icon sheet geometry: cell index == item id. */
     public static final int ICON_SHEET_COLS = 16;
     public static final int ICON_SHEET_W = 256;
     public static final int ICON_SHEET_H = 128;
     public static final int ICON_CELL = 16;
+
+    /** Heart sheet geometry: cell index == quarters filled (0=empty..4=full). */
+    public static final int HEART_FRAMES = 5;
+    public static final int HEART_SHEET_W = HEART_FRAMES * 16;
+    public static final int HEART_SHEET_H = 16;
 
     /** Size (in ints) the snapshot array must have. */
     public static native int snapshotSize();
@@ -58,6 +68,13 @@ public final class GameStateNative {
      * false until the ROM's sprite tables are ready — retry later.
      */
     public static native boolean renderIconSheet(int[] out);
+
+    /**
+     * Fills {@code out} (HEART_SHEET_W * HEART_SHEET_H ARGB ints) with the
+     * real heart-glyph strip (5 cells, empty..full) rendered from the loaded
+     * ROM. Returns false until the ROM's sprite tables are ready — retry.
+     */
+    public static native boolean renderHeartSheet(int[] out);
 
     /** Request equipping an item; applied on the game thread. slot: 0=A, 1=B. */
     public static native void requestEquip(int itemId, int slot);

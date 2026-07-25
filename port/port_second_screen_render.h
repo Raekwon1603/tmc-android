@@ -51,6 +51,14 @@ int Port_SecondScreenRender_RenderIconSheetArgb(uint32_t* px);
 #define SECOND_SCREEN_ICON_SHEET_W (SECOND_SCREEN_ICON_SHEET_COLS * 16)
 #define SECOND_SCREEN_ICON_SHEET_H (SECOND_SCREEN_ICON_SHEET_ROWS * 16)
 
+/* Real heart glyphs (src/ui.c's HeartUIElement, sprite 322 frames 0x71-0x75)
+ * — a 5-cell strip, cell index == quarters filled (0=empty..4=full). Same
+ * ARGB/ready-for-Bitmap contract as the icon sheet above. */
+int Port_SecondScreenRender_RenderHeartSheetArgb(uint32_t* px);
+
+#define SECOND_SCREEN_HEART_FRAMES 5
+#define SECOND_SCREEN_HEART_SHEET_W (SECOND_SCREEN_HEART_FRAMES * 16)
+
 #ifdef __cplusplus
 }
 #endif

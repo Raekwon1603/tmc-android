@@ -70,6 +70,18 @@ void Port_SecondScreenState_Publish(void) {
         next.health = gSave.stats.health;
         next.maxHealth = gSave.stats.maxHealth;
         next.rupees = gSave.stats.rupees;
+        next.kinstonesFused = gSave.kinstones.fusedCount;
+        {
+            uint8_t count = 0;
+            for (u32 i = 0; i < 36; i++) {
+                count += (gSave.figurines[i / 8] >> (i % 8)) & 1;
+            }
+            next.figurineCount = count;
+        }
+        next.elements = (uint8_t)((GetInventoryValue(ITEM_EARTH_ELEMENT) == 1 ? 1 : 0) |
+                                   (GetInventoryValue(ITEM_FIRE_ELEMENT) == 1 ? 2 : 0) |
+                                   (GetInventoryValue(ITEM_WATER_ELEMENT) == 1 ? 4 : 0) |
+                                   (GetInventoryValue(ITEM_WIND_ELEMENT) == 1 ? 8 : 0));
 
         /* Mirror of the pause menu's item-screen fill loop
          * (src/menu/pauseMenu.c: PauseMenu_ItemMenu_Init): every owned

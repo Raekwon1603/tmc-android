@@ -451,29 +451,42 @@ void LoadPaletteGroup(u32 group) {
  * shared gPaletteBuffer — pause-menu screens reload/repurpose those banks
  * constantly for different UI contexts, so "read gPaletteBuffer bank N"
  * would show whatever the *main* screen last put there, not reliably item
- * icon colors. Mirrors LoadPaletteGroup's single-entry resolution above but
- * returns a raw pointer instead of DMA'ing into gPaletteBuffer — placed
- * here (not in port/) because gPaletteGroups/PaletteGroup are file-private
- * to this translation unit. Only resolves the first chained entry; that's
- * sufficient for a single 16-color icon palette (icon graphics don't use
- * multi-group chaining). */
-const u8* Port_GetRawPaletteGroupData(u32 group, u32* outNumColors) {
+ * icon colors. Mirrors LoadPaletteGroup's entry walk above but returns raw
+ * pointers instead of DMA'ing into gPaletteBuffer — placed here (not in
+ * port/) because gPaletteGroups/PaletteGroup are file-private to this
+ * translation unit.
+ *
+ * Returns entry `index` of the group's chain: src = raw RGB555 bytes,
+ * *outDest = hardware bank (>= 16 means OBJ bank dest-16, matching
+ * LoadPalettes' destPaletteNum convention), *outNumPals = 16-color rows.
+ * NULL when the group is unresolved or index is past the chain's end —
+ * callers loop until NULL (verified against tools/secondscreen/
+ * render_icons.py, which decodes the same tables offline from the ROM). */
+const u8* Port_GetRawPaletteGroupEntry(u32 group, u32 index, u32* outDest, u32* outNumPals) {
     const PaletteGroup* paletteGroup = gPaletteGroups[group];
     if (paletteGroup == NULL) {
-        if (outNumColors) {
-            *outNumColors = 0;
-        }
         return NULL;
     }
-    u32 pg = ROM_U32(*(const u32*)paletteGroup);
-    u32 numPalettes = (pg >> 24) & 0xF;
-    if (numPalettes == 0) {
-        numPalettes = 16;
+    for (u32 i = 0;; i++) {
+        u32 pg = ROM_U32(*(const u32*)paletteGroup);
+        u32 numPalettes = (pg >> 24) & 0xF;
+        if (numPalettes == 0) {
+            numPalettes = 16;
+        }
+        if (i == index) {
+            if (outDest) {
+                *outDest = (pg >> 16) & 0xFF;
+            }
+            if (outNumPals) {
+                *outNumPals = numPalettes;
+            }
+            return &gGlobalGfxAndPalettes[(pg & 0xFFFF) * 32];
+        }
+        if (((pg >> 24) & 0x80) == 0) {
+            return NULL;
+        }
+        paletteGroup++;
     }
-    if (outNumColors) {
-        *outNumColors = numPalettes * 16;
-    }
-    return &gGlobalGfxAndPalettes[(pg & 0xFFFF) * 32];
 }
 #endif
 

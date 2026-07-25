@@ -27,8 +27,9 @@
  *   28..31  bottleContents[4]
  *   32 visitedMask low 32 bits   33 visitedMask high 32 bits
  *   34..(34+64*4-1)  rooms: x,y,w,h per room id (64 rooms)
- * Total: 34 + 256 = 290 ints. Java mirrors this in GameStateNative. */
-#define SNAPSHOT_INTS (34 + SECOND_SCREEN_MAX_ROOMS * 4)
+ *   34+64*4  kinstonesFused   +1  figurineCount   +2  elements bitmask
+ * Total: 34 + 256 + 3 = 293 ints. Java mirrors this in GameStateNative. */
+#define SNAPSHOT_INTS (34 + SECOND_SCREEN_MAX_ROOMS * 4 + 3)
 
 extern "C" JNIEXPORT jint JNICALL Java_dev_picori_tmc_GameStateNative_snapshotSize(JNIEnv*, jclass) {
     return SNAPSHOT_INTS;
@@ -66,6 +67,10 @@ extern "C" JNIEXPORT void JNICALL Java_dev_picori_tmc_GameStateNative_getSnapsho
         buf[34 + i * 4 + 2] = snap.rooms[i].w;
         buf[34 + i * 4 + 3] = snap.rooms[i].h;
     }
+    int gearBase = 34 + SECOND_SCREEN_MAX_ROOMS * 4;
+    buf[gearBase + 0] = snap.kinstonesFused;
+    buf[gearBase + 1] = snap.figurineCount;
+    buf[gearBase + 2] = snap.elements;
 
     jsize n = env->GetArrayLength(out);
     if (n > SNAPSHOT_INTS) {
@@ -95,4 +100,20 @@ extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_render
 extern "C" JNIEXPORT void JNICALL Java_dev_picori_tmc_GameStateNative_requestEquip(JNIEnv*, jclass, jint itemId,
                                                                                     jint slot) {
     Port_SecondScreenState_RequestEquip((uint8_t)itemId, (uint8_t)(slot != 0));
+}
+
+/* Real heart glyphs (5-frame strip, empty..full) — see
+ * Port_SecondScreenRender_RenderHeartSheetArgb. */
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_renderHeartSheet(JNIEnv* env, jclass,
+                                                                                            jintArray out) {
+    const int n = SECOND_SCREEN_HEART_SHEET_W * 16;
+    if (env->GetArrayLength(out) < n) {
+        return JNI_FALSE;
+    }
+    static uint32_t px[SECOND_SCREEN_HEART_SHEET_W * 16];
+    if (!Port_SecondScreenRender_RenderHeartSheetArgb(px)) {
+        return JNI_FALSE;
+    }
+    env->SetIntArrayRegion(out, 0, n, (const jint*)px);
+    return JNI_TRUE;
 }
