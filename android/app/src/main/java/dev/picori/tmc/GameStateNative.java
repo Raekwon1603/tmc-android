@@ -59,10 +59,22 @@ public final class GameStateNative {
     /** Local-area map geometry: the room the player is standing in, real
      * tile detail, centered on the player (see port_second_screen_state.h's
      * SECOND_SCREEN_LOCAL_MAP_TILES_W/H). */
-    public static final int LOCAL_MAP_TILES_W = 24;
-    public static final int LOCAL_MAP_TILES_H = 18;
+    public static final int LOCAL_MAP_TILES_W = 20;
+    public static final int LOCAL_MAP_TILES_H = 15;
     public static final int LOCAL_MAP_W = LOCAL_MAP_TILES_W * 16;
     public static final int LOCAL_MAP_H = LOCAL_MAP_TILES_H * 16;
+
+    /** Whole-room map geometry: the "zoomed out" view (see
+     * SECOND_SCREEN_ROOM_MAP_TILES_W/H in port_second_screen_render.h). */
+    public static final int ROOM_MAP_TILES_W = 64;
+    public static final int ROOM_MAP_TILES_H = 64;
+    public static final int ROOM_MAP_W = ROOM_MAP_TILES_W * 16;
+    public static final int ROOM_MAP_H = ROOM_MAP_TILES_H * 16;
+
+    /** Player's room-local pixel position (playerX/Y minus the room's own
+     * origin) — where to draw the marker on the whole-room map. */
+    public static final int PLAYER_ROOM_X = ELEMENTS + 1;
+    public static final int PLAYER_ROOM_Y = ELEMENTS + 2;
 
     /** Size (in ints) the snapshot array must have. */
     public static native int snapshotSize();
@@ -92,6 +104,14 @@ public final class GameStateNative {
      * outside gameplay or before the area's tileset resolves — retry.
      */
     public static native boolean renderLocalMap(int[] out);
+
+    /**
+     * Fills {@code out} (ROOM_MAP_W * ROOM_MAP_H ARGB ints) with the whole
+     * current room in real tile detail — the "zoomed out" view. Only meant
+     * to be called when the zoomed-out view is opened or the room changes,
+     * not every tick. Returns false outside gameplay.
+     */
+    public static native boolean renderRoomMap(int[] out);
 
     /** Request equipping an item; applied on the game thread. slot: 0=A, 1=B. */
     public static native void requestEquip(int itemId, int slot);

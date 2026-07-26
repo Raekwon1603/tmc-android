@@ -36,8 +36,8 @@ extern "C" {
  * include/map.h's MapLayer). 24x18 metatiles = 384x288px, a bit more than
  * one GBA screen's worth of the room the player is actually standing in —
  * real, live tile data (gMapBottom), not a guessed ROM table. */
-#define SECOND_SCREEN_LOCAL_MAP_TILES_W 24
-#define SECOND_SCREEN_LOCAL_MAP_TILES_H 18
+#define SECOND_SCREEN_LOCAL_MAP_TILES_W 20
+#define SECOND_SCREEN_LOCAL_MAP_TILES_H 15
 #define SECOND_SCREEN_LOCAL_MAP_W (SECOND_SCREEN_LOCAL_MAP_TILES_W * 16)
 #define SECOND_SCREEN_LOCAL_MAP_H (SECOND_SCREEN_LOCAL_MAP_TILES_H * 16)
 
@@ -66,6 +66,9 @@ typedef struct {
     uint8_t elements;       /* bit i set = element i owned (Earth/Fire/Water/Wind) */
     int32_t playerX; /* area-space pixels */
     int32_t playerY;
+    int32_t playerRoomX; /* room-local pixels: playerX/Y - gRoomControls.origin_x/y — where to
+                             draw the player marker on the whole-room map (RenderRoomMapArgb). */
+    int32_t playerRoomY;
     /* Pause-menu item screen contents: menuItems[menuSlot] = item id, 0 if
      * that slot is empty. Bottles report the ITEM_BOTTLE1..4 container id;
      * bottleContents[] carries what's inside for icon display. */

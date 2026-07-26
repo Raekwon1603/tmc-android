@@ -28,8 +28,9 @@
  *   32 visitedMask low 32 bits   33 visitedMask high 32 bits
  *   34..(34+64*4-1)  rooms: x,y,w,h per room id (64 rooms)
  *   34+64*4  kinstonesFused   +1  figurineCount   +2  elements bitmask
- * Total: 34 + 256 + 3 = 293 ints. Java mirrors this in GameStateNative. */
-#define SNAPSHOT_INTS (34 + SECOND_SCREEN_MAX_ROOMS * 4 + 3)
+ *   34+64*4+3  playerRoomX    +1  playerRoomY
+ * Total: 34 + 256 + 3 + 2 = 295 ints. Java mirrors this in GameStateNative. */
+#define SNAPSHOT_INTS (34 + SECOND_SCREEN_MAX_ROOMS * 4 + 3 + 2)
 
 extern "C" JNIEXPORT jint JNICALL Java_dev_picori_tmc_GameStateNative_snapshotSize(JNIEnv*, jclass) {
     return SNAPSHOT_INTS;
@@ -71,6 +72,8 @@ extern "C" JNIEXPORT void JNICALL Java_dev_picori_tmc_GameStateNative_getSnapsho
     buf[gearBase + 0] = snap.kinstonesFused;
     buf[gearBase + 1] = snap.figurineCount;
     buf[gearBase + 2] = snap.elements;
+    buf[gearBase + 3] = snap.playerRoomX;
+    buf[gearBase + 4] = snap.playerRoomY;
 
     jsize n = env->GetArrayLength(out);
     if (n > SNAPSHOT_INTS) {
@@ -100,15 +103,42 @@ extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_render
 /* Local-area map — the room the player is standing in, rendered from the
  * live tile data the primary screen is already using (see
  * Port_SecondScreenRender_RenderLocalMapArgb). Returns false outside
- * gameplay or before the area's tileset resolves. */
+ * gameplay or before the area's tileset resolves.
+ *
+ * Writes straight into the Java int[]'s backing memory via
+ * GetPrimitiveArrayCritical instead of rendering to a native scratch buffer
+ * and SetIntArrayRegion-copying it over — this call happens often enough
+ * (the map redraws as the player walks) that the extra 384x288-int copy
+ * was a real, measurable chunk of the reported lag. Critical sections must
+ * be short and make no other JNI calls, which the render function already
+ * satisfies (pure memory writes, no callbacks). */
 extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_renderLocalMap(JNIEnv* env, jclass,
                                                                                           jintArray out) {
     const int n = SECOND_SCREEN_LOCAL_MAP_W * SECOND_SCREEN_LOCAL_MAP_H;
     if (env->GetArrayLength(out) < n) {
         return JNI_FALSE;
     }
-    static uint32_t px[SECOND_SCREEN_LOCAL_MAP_W * SECOND_SCREEN_LOCAL_MAP_H];
-    if (!Port_SecondScreenRender_RenderLocalMapArgb(px)) {
+    void* px = env->GetPrimitiveArrayCritical(out, nullptr);
+    if (px == nullptr) {
+        return JNI_FALSE;
+    }
+    jboolean ok = Port_SecondScreenRender_RenderLocalMapArgb((uint32_t*)px) ? JNI_TRUE : JNI_FALSE;
+    env->ReleasePrimitiveArrayCritical(out, px, 0);
+    return ok;
+}
+
+/* Whole current room, real tile detail — the zoomed-out map view (see
+ * Port_SecondScreenRender_RenderRoomMapArgb). Only called on demand (map
+ * opened/room changed while zoomed out), not per tick, so the plain
+ * static-buffer + SetIntArrayRegion path is fine here. */
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_renderRoomMap(JNIEnv* env, jclass,
+                                                                                         jintArray out) {
+    const int n = SECOND_SCREEN_ROOM_MAP_W * SECOND_SCREEN_ROOM_MAP_H;
+    if (env->GetArrayLength(out) < n) {
+        return JNI_FALSE;
+    }
+    static uint32_t px[SECOND_SCREEN_ROOM_MAP_W * SECOND_SCREEN_ROOM_MAP_H];
+    if (!Port_SecondScreenRender_RenderRoomMapArgb(px)) {
         return JNI_FALSE;
     }
     env->SetIntArrayRegion(out, 0, n, (const jint*)px);

@@ -51,9 +51,6 @@ public class SecondScreenView extends View {
     private static final int COL_GOLD = 0xFFC89A2E;
     private static final int COL_TAG_A = 0xFF2E8B45;
     private static final int COL_TAG_B = 0xFF2E5EC8;
-    private static final int COL_ROOM_UNSEEN = 0xFFB8AC86;
-    private static final int COL_ROOM_SEEN = 0xFF6B9BC9;
-    private static final int COL_ROOM_HERE = 0xFF8FC4F5;
     private static final int COL_HEART = 0xFFD82830;
     private static final int COL_HEART_EMPTY = 0xFFBCA888;
     private static final int COL_RUPEE = 0xFF3AA050;
@@ -73,6 +70,9 @@ public class SecondScreenView extends View {
     private final int[] heartBuf = new int[GameStateNative.HEART_SHEET_W * GameStateNative.HEART_SHEET_H];
     private Bitmap localMap;
     private final int[] localMapBuf = new int[GameStateNative.LOCAL_MAP_W * GameStateNative.LOCAL_MAP_H];
+    private Bitmap roomMap;
+    private final int[] roomMapBuf = new int[GameStateNative.ROOM_MAP_W * GameStateNative.ROOM_MAP_H];
+    private int roomMapArea = -1, roomMapRoom = -1; // which room roomMap currently shows; -1 = none yet
 
     private final Paint fill = new Paint();
     private final Paint icons = new Paint(); // deliberately unfiltered: nearest-neighbor pixel art
@@ -124,6 +124,25 @@ public class SecondScreenView extends View {
                 if (GameStateNative.renderLocalMap(localMapBuf)) {
                     localMap.setPixels(localMapBuf, 0, GameStateNative.LOCAL_MAP_W, 0, 0, GameStateNative.LOCAL_MAP_W,
                             GameStateNative.LOCAL_MAP_H);
+                }
+            }
+            // Whole-room "zoomed out" map: a room's tile layout doesn't change
+            // while you're standing in it, so this only re-renders when the
+            // zoomed-out view is showing AND the area/room actually changed —
+            // never on a fixed tick cadence like the local map above.
+            if (tab == TAB_MAP && mapZoomedOut) {
+                int area = snap[GameStateNative.AREA], room = snap[GameStateNative.ROOM];
+                if (roomMap == null || area != roomMapArea || room != roomMapRoom) {
+                    if (roomMap == null) {
+                        roomMap = Bitmap.createBitmap(GameStateNative.ROOM_MAP_W, GameStateNative.ROOM_MAP_H,
+                                Bitmap.Config.ARGB_8888);
+                    }
+                    if (GameStateNative.renderRoomMap(roomMapBuf)) {
+                        roomMap.setPixels(roomMapBuf, 0, GameStateNative.ROOM_MAP_W, 0, 0, GameStateNative.ROOM_MAP_W,
+                                GameStateNative.ROOM_MAP_H);
+                        roomMapArea = area;
+                        roomMapRoom = room;
+                    }
                 }
             }
             tickCount++;
@@ -255,22 +274,22 @@ public class SecondScreenView extends View {
 
     private void drawMapPanel(Canvas c, RectF r) {
         menuBox(c, r);
-        title(c, r, mapZoomedOut ? "MAP (VISITED)" : "MAP");
+        title(c, r, mapZoomedOut ? "MAP (ROOM)" : "MAP");
 
         if (mapZoomedOut) {
-            drawOverviewMap(c, r);
+            drawRoomMap(c, r);
         } else {
             drawLocalMap(c, r);
         }
 
         // Zoom toggle, top-right corner of the panel.
-        float bs = 30 * u;
+        float bs = 44 * u;
         zoomToggleR.set(r.right - bs - 10 * u, r.top + 8 * u, r.right - 10 * u, r.top + 8 * u + bs);
         fill.setColor(COL_BOX_BORDER);
-        c.drawRoundRect(zoomToggleR, 6 * u, 6 * u, fill);
+        c.drawRoundRect(zoomToggleR, 8 * u, 8 * u, fill);
         text.setColor(0xFFF0EAD0);
         text.setTextAlign(Paint.Align.CENTER);
-        text.setTextSize(bs * 0.5f);
+        text.setTextSize(bs * 0.55f);
         c.drawText(mapZoomedOut ? "⊕" : "⊖", zoomToggleR.centerX(),
                 zoomToggleR.centerY() - (text.ascent() + text.descent()) / 2f, text);
     }
@@ -315,74 +334,37 @@ public class SecondScreenView extends View {
         c.drawCircle(px, py, dot, fill);
     }
 
-    /** Zoomed-out schematic: every room of the current area as a box, colored
-     *  by whether it's been visited this session — the "where have I been"
-     *  overview the real per-room detail view can't show at a glance. */
-    private void drawOverviewMap(Canvas c, RectF r) {
-        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
-        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
-        for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
-            int b = GameStateNative.ROOMS + i * 4;
-            if (snap[b + 2] == 0 || snap[b + 3] == 0) continue;
-            minX = Math.min(minX, snap[b]);
-            minY = Math.min(minY, snap[b + 1]);
-            maxX = Math.max(maxX, snap[b] + snap[b + 2]);
-            maxY = Math.max(maxY, snap[b + 1] + snap[b + 3]);
-        }
-        if (minX >= maxX || minY >= maxY) return;
-
+    /** Zoomed-out view: the whole current room in real tile detail (see
+     *  Port_SecondScreenRender_RenderRoomMapArgb) — not a multi-room world
+     *  map (TMC keeps only the current room's tile data resident; a real
+     *  composited overworld would need persistent per-room caching this
+     *  doesn't build yet), but real ROM art either way, not vector boxes. */
+    private void drawRoomMap(Canvas c, RectF r) {
         float top = r.top + 44 * u, bottom = r.bottom - 14 * u;
-        float pad = (bottom - top) / 14f;
-        float scale = Math.min((r.width() - 28 * u - 2 * pad) / (maxX - minX), (bottom - top - 2 * pad) / (maxY - minY));
-        float ox = r.left + 14 * u + ((r.width() - 28 * u) - (maxX - minX) * scale) / 2f;
-        float oy = top + ((bottom - top) - (maxY - minY) * scale) / 2f;
-
-        long visited = (snap[GameStateNative.VISITED_LO] & 0xFFFFFFFFL)
-                | ((long) snap[GameStateNative.VISITED_HI] << 32);
-        // "Here" by geometry (which room box actually contains the player),
-        // not by room-id index — the id the engine reports and the index
-        // gArea.roomResInfos was populated at don't reliably line up, which
-        // silently left every room drawn as "unseen".
-        int px0 = snap[GameStateNative.PLAYER_X], py0 = snap[GameStateNative.PLAYER_Y];
-        int here = -1;
-        for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
-            int b = GameStateNative.ROOMS + i * 4;
-            if (snap[b + 2] == 0 || snap[b + 3] == 0) continue;
-            if (px0 >= snap[b] && px0 < snap[b] + snap[b + 2] && py0 >= snap[b + 1] && py0 < snap[b + 1] + snap[b + 3]) {
-                here = i;
-                break;
-            }
+        float left = r.left + 14 * u, right = r.right - 14 * u;
+        if (roomMap == null) {
+            text.setColor(COL_TEXT_DARK);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTextSize(14 * u);
+            c.drawText("loading map...", r.centerX(), (top + bottom) / 2f, text);
+            return;
         }
+        // Only the room's actual extent has real content; the rest of the
+        // fixed 64x64-tile buffer is blank. Crop to that before fitting so
+        // small rooms don't shrink to a speck in the panel.
+        int roomW = Math.max(16, Math.min(GameStateNative.ROOM_MAP_W, snap[roomRectBase() + 2]));
+        int roomH = Math.max(16, Math.min(GameStateNative.ROOM_MAP_H, snap[roomRectBase() + 3]));
 
-        for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
-            int b = GameStateNative.ROOMS + i * 4;
-            if (snap[b + 2] == 0 || snap[b + 3] == 0) continue;
-            rect.set(ox + (snap[b] - minX) * scale, oy + (snap[b + 1] - minY) * scale,
-                    ox + (snap[b] - minX + snap[b + 2]) * scale,
-                    oy + (snap[b + 1] - minY + snap[b + 3]) * scale);
-            rect.inset(1.5f, 1.5f);
-            boolean seen = ((visited >> (i & 63)) & 1) != 0;
-            if (i == here) {
-                fill.setColor(COL_ROOM_HERE);
-                c.drawRoundRect(rect, 3f, 3f, fill);
-                stroke.setStrokeWidth(2.5f * u);
-                stroke.setColor(COL_GOLD);
-                c.drawRoundRect(rect, 3f, 3f, stroke);
-            } else if (seen) {
-                fill.setColor(COL_ROOM_SEEN);
-                c.drawRoundRect(rect, 3f, 3f, fill);
-            } else {
-                fill.setColor(COL_ROOM_UNSEEN);
-                c.drawRoundRect(rect, 3f, 3f, fill);
-                stroke.setStrokeWidth(1.5f * u);
-                stroke.setColor(COL_BOX_BORDER);
-                c.drawRoundRect(rect, 3f, 3f, stroke);
-            }
-        }
+        float scale = Math.min((right - left) / roomW, (bottom - top) / roomH);
+        float w = roomW * scale, h = roomH * scale;
+        float ox = left + (right - left - w) / 2f, oy = top + (bottom - top - h) / 2f;
+        src.set(0, 0, roomW, roomH);
+        rect.set(ox, oy, ox + w, oy + h);
+        c.drawBitmap(roomMap, src, rect, icons);
 
-        float px = ox + (snap[GameStateNative.PLAYER_X] - minX) * scale;
-        float py = oy + (snap[GameStateNative.PLAYER_Y] - minY) * scale;
-        float dot = Math.max(4f, (bottom - top) / 44f);
+        float px = ox + snap[GameStateNative.PLAYER_ROOM_X] * scale;
+        float py = oy + snap[GameStateNative.PLAYER_ROOM_Y] * scale;
+        float dot = Math.max(3f, h / 60f);
         float pulse = (float) (0.5 + 0.5 * Math.sin(android.os.SystemClock.uptimeMillis() / 250.0));
         fill.setShader(new RadialGradient(px, py, dot * 3f,
                 Color.argb((int) (110 * pulse), 255, 235, 120), 0, Shader.TileMode.CLAMP));
@@ -392,6 +374,20 @@ public class SecondScreenView extends View {
         c.drawCircle(px, py, dot + 1.5f, fill);
         fill.setColor(COL_GOLD);
         c.drawCircle(px, py, dot, fill);
+    }
+
+    /** Index into snap[] of the current room's {x,y,w,h} entry (geometry
+     *  match against the player's position — see drawRoomMap's roomW/H). */
+    private int roomRectBase() {
+        int px0 = snap[GameStateNative.PLAYER_X], py0 = snap[GameStateNative.PLAYER_Y];
+        for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
+            int b = GameStateNative.ROOMS + i * 4;
+            if (snap[b + 2] == 0 || snap[b + 3] == 0) continue;
+            if (px0 >= snap[b] && px0 < snap[b] + snap[b + 2] && py0 >= snap[b + 1] && py0 < snap[b + 1] + snap[b + 3]) {
+                return b;
+            }
+        }
+        return GameStateNative.ROOMS; // fallback: room 0's slot (may be zeroed; roomW/H clamp handles it)
     }
 
     // ---- ITEMS tab ----

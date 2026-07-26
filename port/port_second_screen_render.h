@@ -67,6 +67,18 @@ int Port_SecondScreenRender_RenderHeartSheetArgb(uint32_t* px);
  * Returns 0 while not in gameplay or before the area's tileset resolves. */
 int Port_SecondScreenRender_RenderLocalMapArgb(uint32_t* px);
 
+/* Whole current room, real tile detail, for the "zoomed out" map view — see
+ * the .c file's comment on why this is room-scoped rather than a
+ * multi-room world map. Not refreshed per-tick like the local map above;
+ * call once when the user opens/room-changes in the zoomed-out view.
+ * Returns 0 outside gameplay. */
+int Port_SecondScreenRender_RenderRoomMapArgb(uint32_t* px);
+
+#define SECOND_SCREEN_ROOM_MAP_TILES_W 64
+#define SECOND_SCREEN_ROOM_MAP_TILES_H 64
+#define SECOND_SCREEN_ROOM_MAP_W (SECOND_SCREEN_ROOM_MAP_TILES_W * 16)
+#define SECOND_SCREEN_ROOM_MAP_H (SECOND_SCREEN_ROOM_MAP_TILES_H * 16)
+
 #ifdef __cplusplus
 }
 #endif

@@ -64,6 +64,8 @@ void Port_SecondScreenState_Publish(void) {
         next.room = gRoomControls.room;
         next.playerX = gPlayerEntity.base.x.HALF.HI;
         next.playerY = gPlayerEntity.base.y.HALF.HI;
+        next.playerRoomX = next.playerX - (int32_t)gRoomControls.origin_x;
+        next.playerRoomY = next.playerY - (int32_t)gRoomControls.origin_y;
         next.equippedA = gSave.stats.equipped[SLOT_A];
         next.equippedB = gSave.stats.equipped[SLOT_B];
         next.equippedSlotA = next.equippedA ? gItemMetaData[next.equippedA].menuSlot : 0xFF;

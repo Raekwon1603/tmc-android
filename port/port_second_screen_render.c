@@ -1,5 +1,7 @@
 #include "port_second_screen_render.h"
 
+#include "main.h"
+#include "map.h"
 #include "port_gba_mem.h"
 #include "port_rom.h"
 #include "port_second_screen_state.h"
@@ -291,15 +293,16 @@ int Port_SecondScreenRender_RenderHeartSheetArgb(uint32_t* px) {
  * LZ77-compressed in ROM), not raw pixel data. Reading already-decoded
  * VRAM sidesteps all of that and is always correct, since it's exactly
  * what the primary screen is rendering from this frame. */
-static void BlitLocalMapLayer(uint32_t* px, int32_t w, const uint16_t* subtiles, uint16_t bgControl) {
+static void BlitLocalMapLayer(uint32_t* px, int32_t w, int32_t tilesW, int32_t tilesH, const uint16_t* subtiles,
+                               uint16_t bgControl) {
     uint32_t charBase = ((uint32_t)bgControl >> 2) & 3u;
     bool is8bpp = (bgControl >> 7) & 1u;
     const uint8_t* charData = &gVram[charBase * 0x4000u];
     uint32_t tileStride = is8bpp ? 64u : 32u;
 
-    for (int32_t mty = 0; mty < SECOND_SCREEN_LOCAL_MAP_TILES_H; mty++) {
-        for (int32_t mtx = 0; mtx < SECOND_SCREEN_LOCAL_MAP_TILES_W; mtx++) {
-            const uint16_t* sub = &subtiles[(uint32_t)(mty * SECOND_SCREEN_LOCAL_MAP_TILES_W + mtx) * 4];
+    for (int32_t mty = 0; mty < tilesH; mty++) {
+        for (int32_t mtx = 0; mtx < tilesW; mtx++) {
+            const uint16_t* sub = &subtiles[(uint32_t)(mty * tilesW + mtx) * 4];
             for (int32_t s = 0; s < 4; s++) {
                 uint16_t entry = sub[s];
                 uint32_t tileIdx = entry & 0x3FFu;
@@ -352,8 +355,70 @@ int Port_SecondScreenRender_RenderLocalMapArgb(uint32_t* px) {
     const int32_t w = SECOND_SCREEN_LOCAL_MAP_W;
     const int32_t h = SECOND_SCREEN_LOCAL_MAP_H;
     memset(px, 0, (size_t)w * (size_t)h * 4u);
-    BlitLocalMapLayer(px, w, snap.localSubtilesBottom, snap.bgControlBottom);
-    BlitLocalMapLayer(px, w, snap.localSubtilesTop, snap.bgControlTop);
+    BlitLocalMapLayer(px, w, SECOND_SCREEN_LOCAL_MAP_TILES_W, SECOND_SCREEN_LOCAL_MAP_TILES_H,
+                       snap.localSubtilesBottom, snap.bgControlBottom);
+    BlitLocalMapLayer(px, w, SECOND_SCREEN_LOCAL_MAP_TILES_W, SECOND_SCREEN_LOCAL_MAP_TILES_H, snap.localSubtilesTop,
+                       snap.bgControlTop);
+    return 1;
+}
+
+/* Whole current room, real tile detail, for the "zoomed out" map toggle —
+ * not the player-centered scrolling window above. Rooms are the actual
+ * scope TMC keeps resident (MapLayer.mapData/subTiles cover exactly one
+ * room's fixed 64x64-metatile grid — see include/map.h), so "zoomed out"
+ * here means "the whole room, shown small" rather than a multi-room
+ * composited overworld, which would need persistent per-room caching this
+ * doesn't attempt yet.
+ *
+ * Reads gMapBottom/gMapTop directly rather than through the mutex-guarded
+ * snapshot: this is only called when the player opens/stays on the zoomed-
+ * out view (not every tick like the local map), so the tiny theoretical
+ * risk of a torn read across a room transition — a one-frame glitch, never
+ * a crash, since MapLayer is a fixed-size struct, not a freed pointer — is
+ * an acceptable tradeoff against adding a second, rarely-used 64x64-tile
+ * block to the hot per-tick snapshot copy. */
+int Port_SecondScreenRender_RenderRoomMapArgb(uint32_t* px) {
+    if (gMain.task != TASK_GAME) {
+        return 0;
+    }
+    const int32_t w = SECOND_SCREEN_ROOM_MAP_W;
+    const int32_t h = SECOND_SCREEN_ROOM_MAP_H;
+    memset(px, 0, (size_t)w * (size_t)h * 4u);
+
+    static uint16_t subtilesBottom[SECOND_SCREEN_ROOM_MAP_TILES_W * SECOND_SCREEN_ROOM_MAP_TILES_H * 4];
+    static uint16_t subtilesTop[SECOND_SCREEN_ROOM_MAP_TILES_W * SECOND_SCREEN_ROOM_MAP_TILES_H * 4];
+    for (int32_t ty = 0; ty < SECOND_SCREEN_ROOM_MAP_TILES_H; ty++) {
+        for (int32_t tx = 0; tx < SECOND_SCREEN_ROOM_MAP_TILES_W; tx++) {
+            uint32_t cell = (uint32_t)(ty * SECOND_SCREEN_ROOM_MAP_TILES_W + tx) * 4;
+            uint16_t tileIdBottom = gMapBottom.mapData[ty * 64 + tx];
+            uint16_t* dstBottom = &subtilesBottom[cell];
+            if (tileIdBottom < 0x4000) {
+                dstBottom[0] = gMapBottom.subTiles[tileIdBottom * 4 + 0];
+                dstBottom[1] = gMapBottom.subTiles[tileIdBottom * 4 + 1];
+                dstBottom[2] = gMapBottom.subTiles[tileIdBottom * 4 + 2];
+                dstBottom[3] = gMapBottom.subTiles[tileIdBottom * 4 + 3];
+            } else {
+                dstBottom[0] = dstBottom[1] = dstBottom[2] = dstBottom[3] = 0;
+            }
+            uint16_t tileIdTop = gMapTop.mapData[ty * 64 + tx];
+            uint16_t* dstTop = &subtilesTop[cell];
+            if (tileIdTop < 0x4000) {
+                dstTop[0] = gMapTop.subTiles[tileIdTop * 4 + 0];
+                dstTop[1] = gMapTop.subTiles[tileIdTop * 4 + 1];
+                dstTop[2] = gMapTop.subTiles[tileIdTop * 4 + 2];
+                dstTop[3] = gMapTop.subTiles[tileIdTop * 4 + 3];
+            } else {
+                dstTop[0] = dstTop[1] = dstTop[2] = dstTop[3] = 0;
+            }
+        }
+    }
+    uint16_t bgControlBottom = gMapBottom.bgSettings ? gMapBottom.bgSettings->control : 0;
+    uint16_t bgControlTop = gMapTop.bgSettings ? gMapTop.bgSettings->control : 0;
+
+    BlitLocalMapLayer(px, w, SECOND_SCREEN_ROOM_MAP_TILES_W, SECOND_SCREEN_ROOM_MAP_TILES_H, subtilesBottom,
+                       bgControlBottom);
+    BlitLocalMapLayer(px, w, SECOND_SCREEN_ROOM_MAP_TILES_W, SECOND_SCREEN_ROOM_MAP_TILES_H, subtilesTop,
+                       bgControlTop);
     return 1;
 }
 
