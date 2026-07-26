@@ -97,6 +97,24 @@ extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_render
     return JNI_TRUE;
 }
 
+/* Local-area map — the room the player is standing in, rendered from the
+ * live tile data the primary screen is already using (see
+ * Port_SecondScreenRender_RenderLocalMapArgb). Returns false outside
+ * gameplay or before the area's tileset resolves. */
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_picori_tmc_GameStateNative_renderLocalMap(JNIEnv* env, jclass,
+                                                                                          jintArray out) {
+    const int n = SECOND_SCREEN_LOCAL_MAP_W * SECOND_SCREEN_LOCAL_MAP_H;
+    if (env->GetArrayLength(out) < n) {
+        return JNI_FALSE;
+    }
+    static uint32_t px[SECOND_SCREEN_LOCAL_MAP_W * SECOND_SCREEN_LOCAL_MAP_H];
+    if (!Port_SecondScreenRender_RenderLocalMapArgb(px)) {
+        return JNI_FALSE;
+    }
+    env->SetIntArrayRegion(out, 0, n, (const jint*)px);
+    return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT void JNICALL Java_dev_picori_tmc_GameStateNative_requestEquip(JNIEnv*, jclass, jint itemId,
                                                                                     jint slot) {
     Port_SecondScreenState_RequestEquip((uint8_t)itemId, (uint8_t)(slot != 0));

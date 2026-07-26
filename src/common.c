@@ -488,6 +488,7 @@ const u8* Port_GetRawPaletteGroupEntry(u32 group, u32 index, u32* outDest, u32* 
         paletteGroup++;
     }
 }
+
 #endif
 
 void LoadPalettes(const u8* src, s32 destPaletteNum, s32 numPalettes) {

@@ -59,6 +59,14 @@ int Port_SecondScreenRender_RenderHeartSheetArgb(uint32_t* px);
 #define SECOND_SCREEN_HEART_FRAMES 5
 #define SECOND_SCREEN_HEART_SHEET_W (SECOND_SCREEN_HEART_FRAMES * 16)
 
+/* Local-area map: the room the player is actually standing in, rendered
+ * from the live MapLayer the primary screen already uses (see
+ * port_second_screen_state.h's localSubtiles comment) — real tile detail,
+ * not a schematic room-box automap. Size is
+ * SECOND_SCREEN_LOCAL_MAP_TILES_W/H (port_second_screen_state.h) * 16px.
+ * Returns 0 while not in gameplay or before the area's tileset resolves. */
+int Port_SecondScreenRender_RenderLocalMapArgb(uint32_t* px);
+
 #ifdef __cplusplus
 }
 #endif

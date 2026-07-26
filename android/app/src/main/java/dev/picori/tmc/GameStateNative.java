@@ -56,6 +56,14 @@ public final class GameStateNative {
     public static final int HEART_SHEET_W = HEART_FRAMES * 16;
     public static final int HEART_SHEET_H = 16;
 
+    /** Local-area map geometry: the room the player is standing in, real
+     * tile detail, centered on the player (see port_second_screen_state.h's
+     * SECOND_SCREEN_LOCAL_MAP_TILES_W/H). */
+    public static final int LOCAL_MAP_TILES_W = 24;
+    public static final int LOCAL_MAP_TILES_H = 18;
+    public static final int LOCAL_MAP_W = LOCAL_MAP_TILES_W * 16;
+    public static final int LOCAL_MAP_H = LOCAL_MAP_TILES_H * 16;
+
     /** Size (in ints) the snapshot array must have. */
     public static native int snapshotSize();
 
@@ -75,6 +83,15 @@ public final class GameStateNative {
      * ROM. Returns false until the ROM's sprite tables are ready — retry.
      */
     public static native boolean renderHeartSheet(int[] out);
+
+    /**
+     * Fills {@code out} (LOCAL_MAP_W * LOCAL_MAP_H ARGB ints) with the room
+     * the player is currently standing in, rendered from the same live tile
+     * data the primary screen is already using this frame — real detail,
+     * not a schematic automap. Centered on the player. Returns false
+     * outside gameplay or before the area's tileset resolves — retry.
+     */
+    public static native boolean renderLocalMap(int[] out);
 
     /** Request equipping an item; applied on the game thread. slot: 0=A, 1=B. */
     public static native void requestEquip(int itemId, int slot);

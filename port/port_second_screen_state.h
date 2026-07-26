@@ -32,6 +32,15 @@ extern "C" {
  * button pseudo-slots. */
 #define SECOND_SCREEN_ITEM_SLOTS 16
 
+/* Local-area map window, centered on the player, in 16px metatiles (see
+ * include/map.h's MapLayer). 24x18 metatiles = 384x288px, a bit more than
+ * one GBA screen's worth of the room the player is actually standing in —
+ * real, live tile data (gMapBottom), not a guessed ROM table. */
+#define SECOND_SCREEN_LOCAL_MAP_TILES_W 24
+#define SECOND_SCREEN_LOCAL_MAP_TILES_H 18
+#define SECOND_SCREEN_LOCAL_MAP_W (SECOND_SCREEN_LOCAL_MAP_TILES_W * 16)
+#define SECOND_SCREEN_LOCAL_MAP_H (SECOND_SCREEN_LOCAL_MAP_TILES_H * 16)
+
 typedef struct {
     uint16_t x, y; /* room origin within the area, pixels (RoomResInfo.map_x/y) */
     uint16_t w, h; /* room size, pixels; w==0 or h==0 -> slot unused */
@@ -67,6 +76,27 @@ typedef struct {
     /* Bit n set = room n of the current area has been entered this session
      * (port-side automap tracking, zelda3-android "visited rooms" style). */
     uint64_t visitedMask;
+    /* Local-area map window centered on the player: 4 subtile entries
+     * (raw GBA screen-entry format — tile index + hflip + vflip + palette
+     * bank, see include/map.h's MapLayer.subTiles) per metatile, row-major.
+     * Real live tile data copied from gMapBottom/gMapTop each publish — the
+     * same two BG layers the primary screen is compositing this frame
+     * (TMC, like most GBA tile engines, splits background terrain and
+     * foreground decoration/overlay across two layers; rendering only one
+     * leaves most of a room's fill tiles transparent). Render order:
+     * bottom first, top composited over it, same as the live PPU. */
+    uint16_t localSubtilesBottom[SECOND_SCREEN_LOCAL_MAP_TILES_W * SECOND_SCREEN_LOCAL_MAP_TILES_H * 4];
+    uint16_t localSubtilesTop[SECOND_SCREEN_LOCAL_MAP_TILES_W * SECOND_SCREEN_LOCAL_MAP_TILES_H * 4];
+    /* BG0CNT-style control words for gMapBottom/gMapTop (bits 2-3 = char
+     * base block, bit 7 = 8bpp flag) — needed to find which VRAM char base
+     * each layer's tile graphics actually live in. gAreaTileSets[area] is
+     * NOT the raw tile blob (it's an array of per-room MapDataDefinition
+     * load descriptors, keyed by the room header's tileSet_id, and the
+     * graphics can be LZ77-compressed in ROM) — reading already-decoded
+     * live VRAM instead sidesteps all of that and is always correct, since
+     * it's exactly what the primary screen is rendering from this frame. */
+    uint16_t bgControlBottom;
+    uint16_t bgControlTop;
 } SecondScreenSnapshot;
 
 /* Called once per game tick from the main loop (src/main.c). Builds a fresh

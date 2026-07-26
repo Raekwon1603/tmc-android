@@ -2,12 +2,18 @@
 
 #include "port_gba_mem.h"
 #include "port_rom.h"
+#include "port_second_screen_state.h"
 #include "sprite.h"
 #include "structures.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Live BG palette (bank*16+ci, banks 0-15) — the same colors the primary
+ * screen is drawing from this frame. Reading it a frame stale during a
+ * palette animation is a cosmetic non-issue, not a correctness one. */
+extern uint16_t gPaletteBuffer[];
 
 /* Defined in src/common.c, next to LoadPaletteGroup — needs the file-private
  * gPaletteGroups/PaletteGroup ROM tables, so it lives there rather than
@@ -274,3 +280,80 @@ int Port_SecondScreenRender_RenderHeartSheetArgb(uint32_t* px) {
     }
     return 1;
 }
+
+/* Blits one metatile layer's worth of subtiles (see the loop body for the
+ * per-subtile decode) into `px`, skipping transparent pixels so a second
+ * call for the other layer can composite over the same buffer. Tile
+ * graphics come straight from live VRAM (gVram, port_gba_mem.h) at the
+ * layer's own BG char base (control bits 2-3) — not gAreaTileSets[area],
+ * which turned out to be an array of per-room MapDataDefinition load
+ * descriptors (keyed by the room header's tileSet_id, sometimes
+ * LZ77-compressed in ROM), not raw pixel data. Reading already-decoded
+ * VRAM sidesteps all of that and is always correct, since it's exactly
+ * what the primary screen is rendering from this frame. */
+static void BlitLocalMapLayer(uint32_t* px, int32_t w, const uint16_t* subtiles, uint16_t bgControl) {
+    uint32_t charBase = ((uint32_t)bgControl >> 2) & 3u;
+    bool is8bpp = (bgControl >> 7) & 1u;
+    const uint8_t* charData = &gVram[charBase * 0x4000u];
+    uint32_t tileStride = is8bpp ? 64u : 32u;
+
+    for (int32_t mty = 0; mty < SECOND_SCREEN_LOCAL_MAP_TILES_H; mty++) {
+        for (int32_t mtx = 0; mtx < SECOND_SCREEN_LOCAL_MAP_TILES_W; mtx++) {
+            const uint16_t* sub = &subtiles[(uint32_t)(mty * SECOND_SCREEN_LOCAL_MAP_TILES_W + mtx) * 4];
+            for (int32_t s = 0; s < 4; s++) {
+                uint16_t entry = sub[s];
+                uint32_t tileIdx = entry & 0x3FFu;
+                bool hflip = (entry >> 10) & 1u;
+                bool vflip = (entry >> 11) & 1u;
+                uint32_t palBank = (entry >> 12) & 0xFu;
+                const uint16_t* bank = is8bpp ? gPaletteBuffer : &gPaletteBuffer[palBank * 16];
+                const uint8_t* tile = charData + (size_t)tileIdx * tileStride;
+                if (tile + tileStride > gVram + sizeof(gVram)) {
+                    continue; /* out-of-range tile index — skip rather than over-read VRAM */
+                }
+                int32_t originX = mtx * 16 + (s & 1) * 8;
+                int32_t originY = mty * 16 + (s >> 1) * 8;
+                for (int32_t row = 0; row < 8; row++) {
+                    int32_t srcRow = vflip ? (7 - row) : row;
+                    for (int32_t col = 0; col < 8; col++) {
+                        int32_t srcCol = hflip ? (7 - col) : col;
+                        uint8_t ci;
+                        if (is8bpp) {
+                            ci = tile[srcRow * 8 + srcCol];
+                        } else {
+                            uint8_t packed = tile[srcRow * 4 + srcCol / 2];
+                            ci = (srcCol & 1) ? (uint8_t)(packed >> 4) : (uint8_t)(packed & 0x0Fu);
+                        }
+                        if (ci == 0) {
+                            continue; /* transparent — lets the other layer show through */
+                        }
+                        px[(size_t)(originY + row) * (size_t)w + (size_t)(originX + col)] = Rgb555ToArgbInt(bank[ci]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Local-area map, straight from the live MapLayer the primary screen is
+ * rendering from right now (see the SecondScreenSnapshot.localSubtiles*
+ * comment in port_second_screen_state.h) — the room the player is actually
+ * standing in, in full tile detail, not a schematic box or a guessed ROM
+ * table. Composites both BG layers (bottom terrain, top decoration/
+ * overlay) in the same order the live PPU would, since either layer alone
+ * leaves most of a room's fill tiles transparent. */
+int Port_SecondScreenRender_RenderLocalMapArgb(uint32_t* px) {
+    SecondScreenSnapshot snap;
+    Port_SecondScreenState_Read(&snap);
+    if (!snap.inGame) {
+        return 0;
+    }
+
+    const int32_t w = SECOND_SCREEN_LOCAL_MAP_W;
+    const int32_t h = SECOND_SCREEN_LOCAL_MAP_H;
+    memset(px, 0, (size_t)w * (size_t)h * 4u);
+    BlitLocalMapLayer(px, w, snap.localSubtilesBottom, snap.bgControlBottom);
+    BlitLocalMapLayer(px, w, snap.localSubtilesTop, snap.bgControlTop);
+    return 1;
+}
+

@@ -8,8 +8,8 @@ import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.RadialGradient;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Handler;
@@ -71,6 +71,8 @@ public class SecondScreenView extends View {
     private final int[] sheetBuf = new int[GameStateNative.ICON_SHEET_W * GameStateNative.ICON_SHEET_H];
     private Bitmap heartSheet;
     private final int[] heartBuf = new int[GameStateNative.HEART_SHEET_W * GameStateNative.HEART_SHEET_H];
+    private Bitmap localMap;
+    private final int[] localMapBuf = new int[GameStateNative.LOCAL_MAP_W * GameStateNative.LOCAL_MAP_H];
 
     private final Paint fill = new Paint();
     private final Paint icons = new Paint(); // deliberately unfiltered: nearest-neighbor pixel art
@@ -84,9 +86,20 @@ public class SecondScreenView extends View {
     private final RectF[] cellRects = new RectF[GameStateNative.ITEM_SLOTS];
     private final int[] cellItems = new int[GameStateNative.ITEM_SLOTS];
     private final RectF tabGearR = new RectF(), tabMapR = new RectF(), tabItemsR = new RectF();
+    private final RectF zoomToggleR = new RectF();
+    private boolean mapZoomedOut = false;
     private int downSlot = -1;
     private long downTime;
     private boolean downOnGrid;
+
+    // The local map's native decode + Bitmap.setPixels (384x288 = ~110K
+    // pixels, twice through JNI) is the heaviest thing this view does, so it
+    // only runs while the MAP tab is actually the one on screen, and at a
+    // lower rate than the rest of the UI — the player doesn't move fast
+    // enough for this to need 30Hz, and every-tick JNI array marshalling of
+    // that size was the main source of the reported lag.
+    private static final int MAP_REFRESH_EVERY_N_TICKS = 3;
+    private int tickCount = 0;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable tick = new Runnable() {
@@ -101,6 +114,19 @@ public class SecondScreenView extends View {
                 heartSheet = Bitmap.createBitmap(heartBuf, GameStateNative.HEART_SHEET_W,
                         GameStateNative.HEART_SHEET_H, Bitmap.Config.ARGB_8888);
             }
+            // Live — the player moves, so this is re-rendered periodically, unlike
+            // the icon/heart sheets above which are fixed ROM art rendered once.
+            if (tab == TAB_MAP && !mapZoomedOut && tickCount % MAP_REFRESH_EVERY_N_TICKS == 0) {
+                if (localMap == null) {
+                    localMap = Bitmap.createBitmap(GameStateNative.LOCAL_MAP_W, GameStateNative.LOCAL_MAP_H,
+                            Bitmap.Config.ARGB_8888);
+                }
+                if (GameStateNative.renderLocalMap(localMapBuf)) {
+                    localMap.setPixels(localMapBuf, 0, GameStateNative.LOCAL_MAP_W, 0, 0, GameStateNative.LOCAL_MAP_W,
+                            GameStateNative.LOCAL_MAP_H);
+                }
+            }
+            tickCount++;
             invalidate();
             handler.postDelayed(this, TICK_MS);
         }
@@ -229,8 +255,70 @@ public class SecondScreenView extends View {
 
     private void drawMapPanel(Canvas c, RectF r) {
         menuBox(c, r);
-        title(c, r, "MAP");
+        title(c, r, mapZoomedOut ? "MAP (VISITED)" : "MAP");
 
+        if (mapZoomedOut) {
+            drawOverviewMap(c, r);
+        } else {
+            drawLocalMap(c, r);
+        }
+
+        // Zoom toggle, top-right corner of the panel.
+        float bs = 30 * u;
+        zoomToggleR.set(r.right - bs - 10 * u, r.top + 8 * u, r.right - 10 * u, r.top + 8 * u + bs);
+        fill.setColor(COL_BOX_BORDER);
+        c.drawRoundRect(zoomToggleR, 6 * u, 6 * u, fill);
+        text.setColor(0xFFF0EAD0);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(bs * 0.5f);
+        c.drawText(mapZoomedOut ? "⊕" : "⊖", zoomToggleR.centerX(),
+                zoomToggleR.centerY() - (text.ascent() + text.descent()) / 2f, text);
+    }
+
+    /** Real tile art: the room the player is standing in, rendered from the
+     *  same live MapLayer data (gMapBottom) the primary screen is already
+     *  drawing from this frame — see Port_SecondScreenRender_RenderLocalMapArgb.
+     *  An earlier attempt to pull this from a per-area ROM table (gfx group
+     *  dest=0x02021F30) turned out to decode a sparse feature-marker list,
+     *  not terrain; confirmed by tracing the live game's own
+     *  LoadPaletteGroup/LoadGfxGroup calls while its real pause-menu map was
+     *  open. This is the actual live tile data instead — always centered on
+     *  the player, so the marker sits at a fixed point (map center) rather
+     *  than needing its own coordinate transform. */
+    private void drawLocalMap(Canvas c, RectF r) {
+        float top = r.top + 44 * u, bottom = r.bottom - 14 * u;
+        float left = r.left + 14 * u, right = r.right - 14 * u;
+        if (localMap == null) {
+            text.setColor(COL_TEXT_DARK);
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTextSize(14 * u);
+            c.drawText("loading map...", r.centerX(), (top + bottom) / 2f, text);
+            return;
+        }
+        float scale = Math.min((right - left) / GameStateNative.LOCAL_MAP_W, (bottom - top) / GameStateNative.LOCAL_MAP_H);
+        float w = GameStateNative.LOCAL_MAP_W * scale, h = GameStateNative.LOCAL_MAP_H * scale;
+        float ox = left + (right - left - w) / 2f, oy = top + (bottom - top - h) / 2f;
+        src.set(0, 0, GameStateNative.LOCAL_MAP_W, GameStateNative.LOCAL_MAP_H);
+        rect.set(ox, oy, ox + w, oy + h);
+        c.drawBitmap(localMap, src, rect, icons);
+
+        float px = ox + w / 2f, py = oy + h / 2f;
+        float dot = Math.max(4f, h / 44f);
+        float pulse = (float) (0.5 + 0.5 * Math.sin(android.os.SystemClock.uptimeMillis() / 250.0));
+        fill.setShader(new RadialGradient(px, py, dot * 3f,
+                Color.argb((int) (110 * pulse), 255, 235, 120), 0, Shader.TileMode.CLAMP));
+        c.drawCircle(px, py, dot * 3f, fill);
+        fill.setShader(null);
+        fill.setColor(0xFF000000);
+        c.drawCircle(px, py, dot + 1.5f, fill);
+        fill.setColor(COL_GOLD);
+        c.drawCircle(px, py, dot, fill);
+    }
+
+    /** Zoomed-out schematic: every room of the current area as a box, colored
+     *  by whether it's been visited this session — the "where have I been"
+     *  overview the real per-room detail view can't show at a glance. */
+    private void drawOverviewMap(Canvas c, RectF r) {
         int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
         int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
         for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
@@ -251,7 +339,20 @@ public class SecondScreenView extends View {
 
         long visited = (snap[GameStateNative.VISITED_LO] & 0xFFFFFFFFL)
                 | ((long) snap[GameStateNative.VISITED_HI] << 32);
-        int here = snap[GameStateNative.ROOM];
+        // "Here" by geometry (which room box actually contains the player),
+        // not by room-id index — the id the engine reports and the index
+        // gArea.roomResInfos was populated at don't reliably line up, which
+        // silently left every room drawn as "unseen".
+        int px0 = snap[GameStateNative.PLAYER_X], py0 = snap[GameStateNative.PLAYER_Y];
+        int here = -1;
+        for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
+            int b = GameStateNative.ROOMS + i * 4;
+            if (snap[b + 2] == 0 || snap[b + 3] == 0) continue;
+            if (px0 >= snap[b] && px0 < snap[b] + snap[b + 2] && py0 >= snap[b + 1] && py0 < snap[b + 1] + snap[b + 3]) {
+                here = i;
+                break;
+            }
+        }
 
         for (int i = 0; i < GameStateNative.MAX_ROOMS; i++) {
             int b = GameStateNative.ROOMS + i * 4;
@@ -261,8 +362,22 @@ public class SecondScreenView extends View {
                     oy + (snap[b + 1] - minY + snap[b + 3]) * scale);
             rect.inset(1.5f, 1.5f);
             boolean seen = ((visited >> (i & 63)) & 1) != 0;
-            fill.setColor(i == here ? COL_ROOM_HERE : seen ? COL_ROOM_SEEN : COL_ROOM_UNSEEN);
-            c.drawRoundRect(rect, 3f, 3f, fill);
+            if (i == here) {
+                fill.setColor(COL_ROOM_HERE);
+                c.drawRoundRect(rect, 3f, 3f, fill);
+                stroke.setStrokeWidth(2.5f * u);
+                stroke.setColor(COL_GOLD);
+                c.drawRoundRect(rect, 3f, 3f, stroke);
+            } else if (seen) {
+                fill.setColor(COL_ROOM_SEEN);
+                c.drawRoundRect(rect, 3f, 3f, fill);
+            } else {
+                fill.setColor(COL_ROOM_UNSEEN);
+                c.drawRoundRect(rect, 3f, 3f, fill);
+                stroke.setStrokeWidth(1.5f * u);
+                stroke.setColor(COL_BOX_BORDER);
+                c.drawRoundRect(rect, 3f, 3f, stroke);
+            }
         }
 
         float px = ox + (snap[GameStateNative.PLAYER_X] - minX) * scale;
@@ -548,7 +663,8 @@ public class SecondScreenView extends View {
         float x = e.getX(), y = e.getY();
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                if (tabGearR.contains(x, y) || tabMapR.contains(x, y) || tabItemsR.contains(x, y)) {
+                if (tabGearR.contains(x, y) || tabMapR.contains(x, y) || tabItemsR.contains(x, y)
+                        || (tab == TAB_MAP && zoomToggleR.contains(x, y))) {
                     downOnGrid = false;
                     return true;
                 }
@@ -560,7 +676,10 @@ public class SecondScreenView extends View {
                 if (tabGearR.contains(x, y)) { tab = TAB_GEAR; performClick(); }
                 else if (tabMapR.contains(x, y)) { tab = TAB_MAP; performClick(); }
                 else if (tabItemsR.contains(x, y)) { tab = TAB_ITEMS; performClick(); }
-                else if (downOnGrid) {
+                else if (tab == TAB_MAP && zoomToggleR.contains(x, y)) {
+                    mapZoomedOut = !mapZoomedOut;
+                    performClick();
+                } else if (downOnGrid) {
                     int slot = hitSlot(x, y);
                     if (slot >= 0 && slot == downSlot && cellItems[slot] != 0) {
                         boolean longPress = e.getEventTime() - downTime >= LONG_PRESS_MS;

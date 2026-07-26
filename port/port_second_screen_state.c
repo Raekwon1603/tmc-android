@@ -11,6 +11,7 @@
 #include "item.h"
 #include "itemMetaData.h"
 #include "main.h"
+#include "map.h"
 #include "player.h"
 #include "room.h"
 #include "save.h"
@@ -110,6 +111,80 @@ void Port_SecondScreenState_Publish(void) {
 
         sVisitedByArea[next.area] |= 1ull << (next.room & 63);
         next.visitedMask = sVisitedByArea[next.area];
+
+        /* Local-area map window, centered on the player, straight from the
+         * live MapLayer the primary screen is already rendering from this
+         * frame (gMapBottom) — real tile data, not a guessed ROM table.
+         * Metatile grid coords follow the same formula the engine itself
+         * uses for tile lookups (src/scroll.c's FillActTileForLayer): world
+         * pixels minus the room origin, >>4 for 16px metatiles, &0x3F for
+         * the 64x64 grid.
+         *
+         * This runs on the game thread every tick regardless of which
+         * second-screen tab is visible, so it has to stay cheap: the
+         * player only crosses into a new metatile every 8-16 frames of
+         * normal walking, so most ticks just replay the last computed
+         * window from a static cache instead of redoing the 24x18 nested
+         * tile lookup. */
+        {
+            static int32_t sLastTileX = INT32_MIN, sLastTileY = INT32_MIN;
+            static uint8_t sLastArea = 0xFF, sLastRoom = 0xFF;
+            static uint16_t sCachedSubtilesBottom[SECOND_SCREEN_LOCAL_MAP_TILES_W * SECOND_SCREEN_LOCAL_MAP_TILES_H *
+                                                   4];
+            static uint16_t sCachedSubtilesTop[SECOND_SCREEN_LOCAL_MAP_TILES_W * SECOND_SCREEN_LOCAL_MAP_TILES_H *
+                                                4];
+            static uint16_t sCachedBgControlBottom, sCachedBgControlTop;
+
+            int32_t playerTileX = (next.playerX - (int32_t)gRoomControls.origin_x) >> 4;
+            int32_t playerTileY = (next.playerY - (int32_t)gRoomControls.origin_y) >> 4;
+
+            if (playerTileX != sLastTileX || playerTileY != sLastTileY || next.area != sLastArea ||
+                next.room != sLastRoom) {
+                sLastTileX = playerTileX;
+                sLastTileY = playerTileY;
+                sLastArea = next.area;
+                sLastRoom = next.room;
+
+                int32_t startTileX = playerTileX - SECOND_SCREEN_LOCAL_MAP_TILES_W / 2;
+                int32_t startTileY = playerTileY - SECOND_SCREEN_LOCAL_MAP_TILES_H / 2;
+                for (int32_t ty = 0; ty < SECOND_SCREEN_LOCAL_MAP_TILES_H; ty++) {
+                    for (int32_t tx = 0; tx < SECOND_SCREEN_LOCAL_MAP_TILES_W; tx++) {
+                        uint32_t gx = (uint32_t)(startTileX + tx) & 0x3F;
+                        uint32_t gy = (uint32_t)(startTileY + ty) & 0x3F;
+                        uint32_t cell = (uint32_t)(ty * SECOND_SCREEN_LOCAL_MAP_TILES_W + tx) * 4;
+
+                        uint16_t tileIdBottom = gMapBottom.mapData[gy * 64 + gx];
+                        uint16_t* dstBottom = &sCachedSubtilesBottom[cell];
+                        if (tileIdBottom < 0x4000) {
+                            dstBottom[0] = gMapBottom.subTiles[tileIdBottom * 4 + 0];
+                            dstBottom[1] = gMapBottom.subTiles[tileIdBottom * 4 + 1];
+                            dstBottom[2] = gMapBottom.subTiles[tileIdBottom * 4 + 2];
+                            dstBottom[3] = gMapBottom.subTiles[tileIdBottom * 4 + 3];
+                        } else {
+                            dstBottom[0] = dstBottom[1] = dstBottom[2] = dstBottom[3] = 0;
+                        }
+
+                        uint16_t tileIdTop = gMapTop.mapData[gy * 64 + gx];
+                        uint16_t* dstTop = &sCachedSubtilesTop[cell];
+                        if (tileIdTop < 0x4000) {
+                            dstTop[0] = gMapTop.subTiles[tileIdTop * 4 + 0];
+                            dstTop[1] = gMapTop.subTiles[tileIdTop * 4 + 1];
+                            dstTop[2] = gMapTop.subTiles[tileIdTop * 4 + 2];
+                            dstTop[3] = gMapTop.subTiles[tileIdTop * 4 + 3];
+                        } else {
+                            dstTop[0] = dstTop[1] = dstTop[2] = dstTop[3] = 0;
+                        }
+                    }
+                }
+                sCachedBgControlBottom = gMapBottom.bgSettings ? gMapBottom.bgSettings->control : 0;
+                sCachedBgControlTop = gMapTop.bgSettings ? gMapTop.bgSettings->control : 0;
+            }
+
+            memcpy(next.localSubtilesBottom, sCachedSubtilesBottom, sizeof(sCachedSubtilesBottom));
+            memcpy(next.localSubtilesTop, sCachedSubtilesTop, sizeof(sCachedSubtilesTop));
+            next.bgControlBottom = sCachedBgControlBottom;
+            next.bgControlTop = sCachedBgControlTop;
+        }
     }
 
     pthread_mutex_lock(&sSnapshotMutex);
