@@ -68,11 +68,17 @@ public class SecondScreenView extends View {
     private final int[] sheetBuf = new int[GameStateNative.ICON_SHEET_W * GameStateNative.ICON_SHEET_H];
     private Bitmap heartSheet;
     private final int[] heartBuf = new int[GameStateNative.HEART_SHEET_W * GameStateNative.HEART_SHEET_H];
-    private Bitmap localMap;
-    private final int[] localMapBuf = new int[GameStateNative.LOCAL_MAP_W * GameStateNative.LOCAL_MAP_H];
     private Bitmap roomMap;
     private final int[] roomMapBuf = new int[GameStateNative.ROOM_MAP_W * GameStateNative.ROOM_MAP_H];
     private int roomMapArea = -1, roomMapRoom = -1; // which room roomMap currently shows; -1 = none yet
+
+    // Zoomed-in is a STATIC crop of the same whole-room bitmap roomMap uses
+    // for zoomed-out — fixed once per room entry, not recentered as the
+    // player walks. Only the marker dot moves (cheap: a vector draw against
+    // the already-cached crop), which is what makes this exactly as
+    // lag-free as zoomed-out: no native re-render, no JNI, no bitmap
+    // re-upload ever happens while just walking around a room.
+    private int localCropLeft, localCropTop;
 
     private final Paint fill = new Paint();
     private final Paint icons = new Paint(); // deliberately unfiltered: nearest-neighbor pixel art
@@ -92,15 +98,6 @@ public class SecondScreenView extends View {
     private long downTime;
     private boolean downOnGrid;
 
-    // The local map's native decode + Bitmap.setPixels (384x288 = ~110K
-    // pixels, twice through JNI) is the heaviest thing this view does, so it
-    // only runs while the MAP tab is actually the one on screen, and at a
-    // lower rate than the rest of the UI — the player doesn't move fast
-    // enough for this to need 30Hz, and every-tick JNI array marshalling of
-    // that size was the main source of the reported lag.
-    private static final int MAP_REFRESH_EVERY_N_TICKS = 3;
-    private int tickCount = 0;
-
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable tick = new Runnable() {
         @Override
@@ -114,23 +111,12 @@ public class SecondScreenView extends View {
                 heartSheet = Bitmap.createBitmap(heartBuf, GameStateNative.HEART_SHEET_W,
                         GameStateNative.HEART_SHEET_H, Bitmap.Config.ARGB_8888);
             }
-            // Live — the player moves, so this is re-rendered periodically, unlike
-            // the icon/heart sheets above which are fixed ROM art rendered once.
-            if (tab == TAB_MAP && !mapZoomedOut && tickCount % MAP_REFRESH_EVERY_N_TICKS == 0) {
-                if (localMap == null) {
-                    localMap = Bitmap.createBitmap(GameStateNative.LOCAL_MAP_W, GameStateNative.LOCAL_MAP_H,
-                            Bitmap.Config.ARGB_8888);
-                }
-                if (GameStateNative.renderLocalMap(localMapBuf)) {
-                    localMap.setPixels(localMapBuf, 0, GameStateNative.LOCAL_MAP_W, 0, 0, GameStateNative.LOCAL_MAP_W,
-                            GameStateNative.LOCAL_MAP_H);
-                }
-            }
-            // Whole-room "zoomed out" map: a room's tile layout doesn't change
-            // while you're standing in it, so this only re-renders when the
-            // zoomed-out view is showing AND the area/room actually changed —
-            // never on a fixed tick cadence like the local map above.
-            if (tab == TAB_MAP && mapZoomedOut) {
+            // The ONLY native map render: the whole current room. Zoomed-in
+            // and zoomed-out both just draw different crops of this same
+            // bitmap, so this only re-renders on an actual room/area change —
+            // never per tick, never while just walking around. That's what
+            // makes both views equally lag-free.
+            if (tab == TAB_MAP) {
                 int area = snap[GameStateNative.AREA], room = snap[GameStateNative.ROOM];
                 if (roomMap == null || area != roomMapArea || room != roomMapRoom) {
                     if (roomMap == null) {
@@ -142,10 +128,21 @@ public class SecondScreenView extends View {
                                 GameStateNative.ROOM_MAP_H);
                         roomMapArea = area;
                         roomMapRoom = room;
+                        // Fix the zoomed-in crop once, centered on the player at
+                        // the moment they entered this room — it does NOT
+                        // recenter as they walk (that's the "static" the zoomed-in
+                        // view is meant to have, matching zoomed-out).
+                        int roomW = Math.max(GameStateNative.LOCAL_MAP_W,
+                                Math.min(GameStateNative.ROOM_MAP_W, snap[roomRectBase() + 2]));
+                        int roomH = Math.max(GameStateNative.LOCAL_MAP_H,
+                                Math.min(GameStateNative.ROOM_MAP_H, snap[roomRectBase() + 3]));
+                        int cropW = Math.min(GameStateNative.LOCAL_MAP_W, roomW);
+                        int cropH = Math.min(GameStateNative.LOCAL_MAP_H, roomH);
+                        localCropLeft = clamp(snap[GameStateNative.PLAYER_ROOM_X] - cropW / 2, 0, roomW - cropW);
+                        localCropTop = clamp(snap[GameStateNative.PLAYER_ROOM_Y] - cropH / 2, 0, roomH - cropH);
                     }
                 }
             }
-            tickCount++;
             invalidate();
             handler.postDelayed(this, TICK_MS);
         }
@@ -282,46 +279,49 @@ public class SecondScreenView extends View {
             drawLocalMap(c, r);
         }
 
-        // Zoom toggle, top-right corner of the panel.
+        // Zoom toggle, top-right corner of the panel. The drawn button is
+        // small on purpose (doesn't want to cover the map), but its touch
+        // target is padded well beyond its visual bounds — a small button
+        // with a hitbox that exactly matches its pixels is exactly the kind
+        // of "works if you hit it just right" target that felt unresponsive.
         float bs = 44 * u;
-        zoomToggleR.set(r.right - bs - 10 * u, r.top + 8 * u, r.right - 10 * u, r.top + 8 * u + bs);
+        rect.set(r.right - bs - 10 * u, r.top + 8 * u, r.right - 10 * u, r.top + 8 * u + bs);
+        float pad = 16 * u;
+        zoomToggleR.set(rect.left - pad, rect.top - pad, rect.right + pad, rect.bottom + pad);
         fill.setColor(COL_BOX_BORDER);
-        c.drawRoundRect(zoomToggleR, 8 * u, 8 * u, fill);
+        c.drawRoundRect(rect, 8 * u, 8 * u, fill);
         text.setColor(0xFFF0EAD0);
         text.setTextAlign(Paint.Align.CENTER);
         text.setTextSize(bs * 0.55f);
-        c.drawText(mapZoomedOut ? "⊕" : "⊖", zoomToggleR.centerX(),
-                zoomToggleR.centerY() - (text.ascent() + text.descent()) / 2f, text);
+        c.drawText(mapZoomedOut ? "⊕" : "⊖", rect.centerX(),
+                rect.centerY() - (text.ascent() + text.descent()) / 2f, text);
     }
 
-    /** Real tile art: the room the player is standing in, rendered from the
-     *  same live MapLayer data (gMapBottom) the primary screen is already
-     *  drawing from this frame — see Port_SecondScreenRender_RenderLocalMapArgb.
-     *  An earlier attempt to pull this from a per-area ROM table (gfx group
-     *  dest=0x02021F30) turned out to decode a sparse feature-marker list,
-     *  not terrain; confirmed by tracing the live game's own
-     *  LoadPaletteGroup/LoadGfxGroup calls while its real pause-menu map was
-     *  open. This is the actual live tile data instead — always centered on
-     *  the player, so the marker sits at a fixed point (map center) rather
-     *  than needing its own coordinate transform. */
+    /** Real tile art, zoomed in on the player — a STATIC crop of the same
+     *  whole-room bitmap drawRoomMap uses (see the roomMap field comment),
+     *  fixed once when this room was entered (see the tick Runnable). Never
+     *  recenters as the player walks; only the marker dot moves, clamped to
+     *  stay within the drawn crop so it never disappears off the edge. */
     private void drawLocalMap(Canvas c, RectF r) {
         float top = r.top + 44 * u, bottom = r.bottom - 14 * u;
         float left = r.left + 14 * u, right = r.right - 14 * u;
-        if (localMap == null) {
+        if (roomMap == null) {
             text.setColor(COL_TEXT_DARK);
             text.setTextAlign(Paint.Align.CENTER);
             text.setTextSize(14 * u);
             c.drawText("loading map...", r.centerX(), (top + bottom) / 2f, text);
             return;
         }
-        float scale = Math.min((right - left) / GameStateNative.LOCAL_MAP_W, (bottom - top) / GameStateNative.LOCAL_MAP_H);
-        float w = GameStateNative.LOCAL_MAP_W * scale, h = GameStateNative.LOCAL_MAP_H * scale;
+        int cropW = GameStateNative.LOCAL_MAP_W, cropH = GameStateNative.LOCAL_MAP_H;
+        float scale = Math.min((right - left) / cropW, (bottom - top) / cropH);
+        float w = cropW * scale, h = cropH * scale;
         float ox = left + (right - left - w) / 2f, oy = top + (bottom - top - h) / 2f;
-        src.set(0, 0, GameStateNative.LOCAL_MAP_W, GameStateNative.LOCAL_MAP_H);
+        src.set(localCropLeft, localCropTop, localCropLeft + cropW, localCropTop + cropH);
         rect.set(ox, oy, ox + w, oy + h);
-        c.drawBitmap(localMap, src, rect, icons);
+        c.drawBitmap(roomMap, src, rect, icons);
 
-        float px = ox + w / 2f, py = oy + h / 2f;
+        float px = ox + clamp(snap[GameStateNative.PLAYER_ROOM_X] - localCropLeft, 0, cropW) * scale;
+        float py = oy + clamp(snap[GameStateNative.PLAYER_ROOM_Y] - localCropTop, 0, cropH) * scale;
         float dot = Math.max(4f, h / 44f);
         float pulse = (float) (0.5 + 0.5 * Math.sin(android.os.SystemClock.uptimeMillis() / 250.0));
         fill.setShader(new RadialGradient(px, py, dot * 3f,
@@ -332,6 +332,10 @@ public class SecondScreenView extends View {
         c.drawCircle(px, py, dot + 1.5f, fill);
         fill.setColor(COL_GOLD);
         c.drawCircle(px, py, dot, fill);
+    }
+
+    private static int clamp(int v, int lo, int hi) {
+        return v < lo ? lo : Math.min(v, hi);
     }
 
     /** Zoomed-out view: the whole current room in real tile detail (see
